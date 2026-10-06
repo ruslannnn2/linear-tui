@@ -316,9 +316,46 @@ impl IssueFilter {
     }
 }
 
+/// `(label, url)` of a line that is only `![label](url)`, as Linear writes images.
+pub fn line_image(line: &str) -> Option<(&str, &str)> {
+    let rest = line.trim().strip_prefix("![")?;
+    let (label, rest) = rest.split_once("](")?;
+    let url = rest.strip_suffix(')')?;
+    (!url.is_empty() && !url.contains(char::is_whitespace)).then_some((label, url))
+}
+
+impl Issue {
+    /// Image URLs in the description and thread, deduped.
+    pub fn image_urls(&self) -> Vec<&str> {
+        let description = self.description.as_deref().unwrap_or_default();
+        let comments = self.comments.iter().flat_map(|c| &c.nodes);
+        let mut urls: Vec<&str> = Vec::new();
+        for text in std::iter::once(description).chain(comments.map(|c| c.body.as_str())) {
+            for (_, url) in text.lines().filter_map(line_image) {
+                if !urls.contains(&url) {
+                    urls.push(url);
+                }
+            }
+        }
+        urls
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Only a line that is just an image counts.
+    #[test]
+    fn only_a_line_of_its_own_is_an_image() {
+        assert_eq!(
+            line_image("  ![shot.png](https://uploads.linear.app/a/b)"),
+            Some(("shot.png", "https://uploads.linear.app/a/b"))
+        );
+        assert_eq!(line_image("see ![x](https://x/y.png) here"), None);
+        assert_eq!(line_image("[x](https://x/y)"), None);
+        assert_eq!(line_image("![x]()"), None);
+    }
 
     /// Each priority sits at its own place in the priority menu, and that
     /// place gives it back; a place past the end is no priority.

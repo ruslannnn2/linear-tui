@@ -6,6 +6,7 @@
 //! everywhere it is held, pages merged without duplicates.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use crate::core::entity::Page;
 use crate::core::entity::{
@@ -255,7 +256,18 @@ pub struct Store {
     pub view_projects: Rows<Project>,
     /// The issue open in the detail view, with its comment thread.
     pub current_issue: Option<Issue>,
+    /// Issue images by URL.
+    // ponytail: never evicted; add eviction if memory matters.
+    pub images: HashMap<String, Image>,
     pub requested: Requested,
+}
+
+/// An issue image's file.
+#[derive(Debug, Clone)]
+pub enum Image {
+    Loading,
+    Loaded(Arc<[u8]>),
+    Failed,
 }
 
 impl Store {

@@ -202,6 +202,16 @@ async fn issue(
             }
         }
         R::OpenInBrowser(url) => open_in_browser(url)?,
+        // No status-line error; the image stays a placeholder.
+        R::Image { url } => Message::Image {
+            url: url.clone(),
+            file: client
+                .download(url)
+                .await
+                .inspect_err(|e| tracing::warn!(%url, "image not fetched: {e}"))
+                .ok()
+                .map(Into::into),
+        },
     })
 }
 

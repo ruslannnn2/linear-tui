@@ -170,7 +170,9 @@ impl App {
                 let id = issue.id.clone();
                 let adopted = usecase::issue::take_detail(&mut self.store, *issue);
                 self.restored_issue_loaded(&id, adopted);
+                self.fetch_images();
             }
+            Message::Image { url, file } => usecase::issue::take_image(&mut self.store, url, file),
             Message::ProjectIssues { project_id, page } => {
                 let of = ListOf::ProjectIssues(project_id);
                 self.accept_issue_page(IssueSource::Project, &of, page);

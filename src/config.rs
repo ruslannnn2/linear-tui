@@ -36,6 +36,7 @@ const KNOWN_KEYS: &[(&str, &[&str])] = &[
         "ui",
         &[
             "default_team",
+            "image_protocol",
             "items_per_page",
             "theme",
             "sidebar",
@@ -98,6 +99,9 @@ pub struct UiConfig {
     /// How a list groups its issues out of the box.
     #[serde(default)]
     pub group_by: GroupByName,
+    /// `sixel`, `kitty`, `iterm2`, `halfblocks`, or `off`; unset detects.
+    /// Over SSH or tmux detection often falls back to halfblocks.
+    pub image_protocol: Option<String>,
 }
 
 impl Default for UiConfig {
@@ -109,6 +113,7 @@ impl Default for UiConfig {
             sidebar: default_true(),
             sidebar_width: default_sidebar_width(),
             group_by: GroupByName::default(),
+            image_protocol: None,
         }
     }
 }
@@ -428,6 +433,7 @@ mod tests {
         config.auth.oauth_client_id = Some("id".into());
         config.auth.oauth_client_secret = Some("secret".into());
         config.ui.default_team = Some("ENG".into());
+        config.ui.image_protocol = Some("sixel".into());
         config.workspaces.insert(
             "~/dev/app".into(),
             WorkspaceConfig {

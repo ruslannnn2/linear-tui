@@ -37,6 +37,9 @@ const API_URL: &str = "https://api.linear.app/graphql";
 /// request — and the spinner — going until the app is closed.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Only this host gets the credentials on image fetches.
+const UPLOADS_HOST: &str = "uploads.linear.app";
+const MAX_IMAGE_BYTES: usize = 25 * 1024 * 1024;
 
 /// Fields selected for every issue, list row or detail alike, so that an issue
 /// coming from any query is equally usable everywhere in the UI.
@@ -284,6 +287,34 @@ impl LinearClient {
                 Err(ApiError::Decode("the response is not JSON".into()))
             }
         }
+    }
+
+    /// Fetch an issue image. Credentials go only to Linear's uploads host.
+    pub async fn download(&self, url: &str) -> Result<Vec<u8>, ApiError> {
+        let parsed = reqwest::Url::parse(url).map_err(|e| ApiError::Decode(e.to_string()))?;
+        let mut request = self.http.get(parsed.clone());
+        if parsed.scheme() == "https" && parsed.host_str() == Some(UPLOADS_HOST) {
+            request = request.header(
+                reqwest::header::AUTHORIZATION,
+                self.credentials.authorization().await?,
+            );
+        }
+        let mut resp = request.send().await.map_err(ApiError::Transport)?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(ApiError::Http {
+                status,
+                body: String::new(),
+            });
+        }
+        let mut file = Vec::new();
+        while let Some(chunk) = resp.chunk().await.map_err(ApiError::Transport)? {
+            if file.len() + chunk.len() > MAX_IMAGE_BYTES {
+                return Err(ApiError::Decode("the image is too large".into()));
+            }
+            file.extend_from_slice(&chunk);
+        }
+        Ok(file)
     }
 
     pub async fn teams(&self) -> Result<Vec<Team>, ApiError> {

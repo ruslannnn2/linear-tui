@@ -38,6 +38,7 @@ team = "WEB"
 | `theme` | `"default"` | `"default"`, `"light"`, or `"ocean"`. |
 | `sidebar` | `true` | Show the sidebar. It hides itself on terminals narrower than 100 columns regardless. |
 | `sidebar_width` | `26` | Sidebar width in columns, `18`–`48`. |
+| `image_protocol` | detected | `sixel`, `kitty`, `iterm2`, `halfblocks`, or `off`. Set it when detection falls back to blocky halfblocks, e.g. over SSH or tmux (WezTerm: `iterm2`). |
 | `group_by` | `"status"` | How issue lists are grouped at first: `"status"`, `"assignee"`, `"priority"`, `"project"`, or `"none"`. `D` changes it while running. |
 
 ### Themes

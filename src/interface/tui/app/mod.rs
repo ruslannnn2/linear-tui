@@ -194,6 +194,8 @@ pub struct App {
     /// Whether there is a terminal to lend `$EDITOR`. A headless instance
     /// has none, and edits a description in a field instead.
     pub external_editor: bool,
+    /// Whether the terminal draws images.
+    pub images: bool,
     /// herdr's agents and the issues they work on, from the plugin.
     pub agents: Vec<crate::core::entity::AgentLink>,
     /// Notes written for the agent and not yet sent.
@@ -223,6 +225,7 @@ impl App {
             should_quit: false,
             herdr: false,
             external_editor: false,
+            images: false,
             agents: Vec::new(),
             notes: Default::default(),
             restore: None,
@@ -269,6 +272,14 @@ impl App {
     fn send(&mut self, req: Option<impl Into<Request>>) {
         if let Some(req) = req {
             self.request(req);
+        }
+    }
+
+    fn fetch_images(&mut self) {
+        if self.images {
+            for request in usecase::issue::fetch_images(&mut self.store) {
+                self.request(request);
+            }
         }
     }
 

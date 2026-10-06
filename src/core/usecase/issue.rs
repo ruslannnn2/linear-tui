@@ -11,7 +11,8 @@
 //! **One issue.** [`open`] reads it with its thread, and [`take_detail`]
 //! takes what Linear sends; [`ensure_thread`] keeps the thread in view and
 //! [`refresh`] reads it again. [`copy`] and [`open_url`] take its
-//! identifier, URL, or branch name elsewhere.
+//! identifier, URL, or branch name elsewhere. [`fetch_images`] and
+//! [`take_image`] load its images.
 //!
 //! **Changes.** [`set_status`], [`set_priority`], [`set_assignee`],
 //! [`assign_to_me`], and [`update`] for any of its fields at once — title,
@@ -33,7 +34,7 @@ use crate::core::entity::{
     CommentId, CustomViewId, CycleId, IssueId, LabelId, MilestoneId, ProjectId, TeamId, UserId,
     WorkflowStateId,
 };
-use crate::core::store::{IssueSource, List, ListOf, Store};
+use crate::core::store::{Image, IssueSource, List, ListOf, Store};
 
 /// What the issue use cases ask of Linear, and of the desktop.
 #[derive(Debug, Clone, PartialEq)]
@@ -116,6 +117,10 @@ pub enum Request {
     },
     /// Show the issue's page on linear.app in the desktop's browser.
     OpenInBrowser(String),
+    /// An issue image's file.
+    Image {
+        url: String,
+    },
 }
 
 impl Request {
@@ -368,6 +373,29 @@ pub fn ensure_thread(store: &Store) -> Option<Request> {
     issue.comments.is_none().then(|| Request::Detail {
         issue_id: issue.id.clone(),
     })
+}
+
+/// **Fetch the open issue's images**, each URL once.
+pub fn fetch_images(store: &mut Store) -> Vec<Request> {
+    let Some(issue) = &store.current_issue else {
+        return Vec::new();
+    };
+    let mut requests = Vec::new();
+    for url in issue.image_urls() {
+        if !store.images.contains_key(url) {
+            store.images.insert(url.to_owned(), Image::Loading);
+            requests.push(Request::Image {
+                url: url.to_owned(),
+            });
+        }
+    }
+    requests
+}
+
+/// **An image arrives**; `None` marks it failed.
+pub fn take_image(store: &mut Store, url: String, file: Option<std::sync::Arc<[u8]>>) {
+    let image = file.map_or(Image::Failed, Image::Loaded);
+    store.images.insert(url, image);
 }
 
 /// **Read the open issue again**, thread and all.
@@ -813,6 +841,41 @@ mod tests {
         store.issues[IssueSource::My].items = vec![issue.clone()];
         store.current_issue = Some(issue);
         store
+    }
+
+    /// Each image URL is asked for once.
+    #[test]
+    fn each_image_is_fetched_only_once() {
+        let mut store = store_with_issue();
+        let issue = store.current_issue.as_mut().unwrap();
+        issue.description = Some("text\n![a](https://u/1)\n![again](https://u/1)".into());
+        issue.comments = Some(
+            serde_json::from_str(r#"{"nodes":[{"id":"c1","body":"![b](https://u/2)"}]}"#).unwrap(),
+        );
+        let urls = |requests: Vec<Request>| -> Vec<String> {
+            requests
+                .into_iter()
+                .map(|r| match r {
+                    Request::Image { url } => url,
+                    other => panic!("{other:?}"),
+                })
+                .collect()
+        };
+        assert_eq!(
+            urls(fetch_images(&mut store)),
+            ["https://u/1", "https://u/2"]
+        );
+        assert!(fetch_images(&mut store).is_empty());
+    }
+
+    /// A failed image is marked failed, not left loading.
+    #[test]
+    fn an_image_that_cannot_be_fetched_is_marked_failed() {
+        let mut store = store_with_issue();
+        take_image(&mut store, "https://u/1".into(), Some(vec![1, 2].into()));
+        take_image(&mut store, "https://u/2".into(), None);
+        assert!(matches!(store.images["https://u/1"], Image::Loaded(_)));
+        assert!(matches!(store.images["https://u/2"], Image::Failed));
     }
 
     /// Every copy of `i1`, so a test can check they agree.

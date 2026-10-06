@@ -19,6 +19,7 @@
 //! are not, for the reason given:
 //!
 //! Not end to end:
+//! - `issue::fetch_images`, `issue::take_image` — need a graphics terminal
 //! - `agent::agent_for`, `agent::jump` — need herdr and its agents
 //! - `notes::salvage` — needs herdr to refuse a hand-off
 //! - `issue::change_refused` — needs Linear to refuse a change linear-tui allows

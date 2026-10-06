@@ -10,21 +10,23 @@ use std::collections::HashMap;
 
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Rect},
+    layout::{Constraint, Layout, Rect, Size},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
 };
+use ratatui_image::sliced::SignedPosition;
 use unicode_width::UnicodeWidthStr;
 
-use super::markdown::{self, wrap};
+use super::images::Images;
+use super::markdown::{self, ImageSlot, wrap};
 use super::widgets::{
     self, agent_glyph, avatar, label_chip, person, priority_glyph, short_date, state_color,
     state_glyph, truncate, user_name,
 };
 use crate::config::Theme;
 use crate::core::entity::AgentLink;
-use crate::core::entity::{Comment, Issue, StateType};
+use crate::core::entity::{Comment, Issue, StateType, line_image};
 use crate::interface::tui::app::{App, CommentTarget, InputMode};
 use crate::interface::tui::look::hex_color;
 
@@ -33,7 +35,10 @@ const PANEL_WIDTH: u16 = 34;
 /// Narrowest content pane that still gets a separate properties panel.
 const PANEL_MIN_TOTAL: u16 = 96;
 
-pub fn draw(f: &mut Frame, app: &mut App, memo: &mut Memo, area: Rect) {
+/// Cells an image takes within a width; `None` if it cannot be drawn.
+type SizeOf<'a> = dyn FnMut(&str, u16) -> Option<Size> + 'a;
+
+pub fn draw(f: &mut Frame, app: &mut App, memo: &mut Memo, images: &mut Images, area: Rect) {
     let th = app.theme;
     // Borrowed, not cloned: a long thread is a lot of strings to copy on
     // every spinner tick.
@@ -66,7 +71,9 @@ pub fn draw(f: &mut Frame, app: &mut App, memo: &mut Memo, area: Rect) {
         ..main
     };
     memo.begin();
-    let body = body_lines(issue, body_area.width, !with_panel, &th, memo);
+    let files = &app.store.images;
+    let mut size_of = |url: &str, width: u16| images.size(url, files, width);
+    let body = body_lines(issue, body_area.width, !with_panel, &th, memo, &mut size_of);
     memo.finish();
 
     app.frame.detail_lines = u16::try_from(body.len).unwrap_or(u16::MAX);
@@ -85,6 +92,20 @@ pub fn draw(f: &mut Frame, app: &mut App, memo: &mut Memo, area: Rect) {
         body_area.height as usize,
     );
     f.render_widget(Paragraph::new(in_view), body_area);
+
+    // Images over their rows, clipped to the view.
+    let scroll = i64::from(app.view.detail_scroll);
+    for (line, slot) in &body.images {
+        let y = *line as i64 - scroll;
+        if y >= i64::from(body_area.height) || y + i64::from(slot.size.height) <= 0 {
+            continue;
+        }
+        let position = SignedPosition {
+            x: slot.x as i16,
+            y: y.clamp(i64::from(i16::MIN), i64::from(i16::MAX)) as i16,
+        };
+        images.draw(f, &slot.url, slot.size, body_area, position);
+    }
 
     if app.frame.detail_lines > app.frame.detail_viewport {
         let mut state = ScrollbarState::new(
@@ -198,7 +219,10 @@ struct MemoEntry {
     /// Whether the lines are closed with a comment card's right edge.
     card: bool,
     theme: Theme,
+    /// Image sizes rendered at; a change is a miss.
+    sizes: Vec<Option<Size>>,
     lines: Vec<Line<'static>>,
+    images: Vec<ImageSlot>,
 }
 
 impl Memo {
@@ -223,35 +247,44 @@ impl Memo {
         gutter: &[Span<'static>],
         card: bool,
         th: &Theme,
+        size_of: &mut SizeOf,
     ) -> usize {
         let index = self.next;
         self.next += 1;
+        // A card's text stops 2 short of its right edge.
+        let inner = if card { width.saturating_sub(2) } else { width };
+        let text_width = (inner as usize)
+            .saturating_sub(gutter.iter().map(|s| s.width()).sum())
+            .max(8) as u16;
+        let sizes: Vec<Option<Size>> = source
+            .lines()
+            .filter_map(line_image)
+            .map(|(_, url)| size_of(url, text_width))
+            .collect();
         let hit = self.entries.get(index).is_some_and(|e| {
             e.width == width
                 && e.card == card
                 && e.source == source
                 && e.gutter == gutter
                 && e.theme == *th
+                && e.sizes == sizes
         });
         if !hit {
-            let lines = if card {
-                // `render` fills `width - 2` including the gutter, which
-                // leaves one cell of padding before the right edge.
-                let mut lines = markdown::render(source, width.saturating_sub(2), gutter, th);
+            let (mut lines, images) = markdown::render(source, inner, gutter, th, size_of);
+            if card {
                 for line in &mut lines {
                     close_card_line(line, width as usize, th);
                 }
-                lines
-            } else {
-                markdown::render(source, width, gutter, th)
-            };
+            }
             let entry = MemoEntry {
                 source: source.to_owned(),
                 width,
                 gutter: gutter.to_vec(),
                 card,
                 theme: *th,
+                sizes,
                 lines,
+                images,
             };
             match self.entries.get_mut(index) {
                 Some(slot) => *slot = entry,
@@ -264,6 +297,10 @@ impl Memo {
     fn lines(&self, entry: usize) -> &[Line<'static>] {
         &self.entries[entry].lines
     }
+
+    fn images(&self, entry: usize) -> &[ImageSlot] {
+        &self.entries[entry].images
+    }
 }
 
 /// The detail body as one frame lays it out: lines built for this frame,
@@ -273,6 +310,8 @@ struct Body {
     pieces: Vec<Piece>,
     /// Total height in lines.
     len: usize,
+    /// Images, by the body line their rows start on.
+    images: Vec<(usize, ImageSlot)>,
 }
 
 enum Piece {
@@ -285,6 +324,7 @@ impl Body {
         Self {
             pieces: Vec::new(),
             len: 0,
+            images: Vec::new(),
         }
     }
 
@@ -301,6 +341,9 @@ impl Body {
 
     fn memo(&mut self, memo: &Memo, entry: usize) {
         self.pieces.push(Piece::Memo(entry));
+        for slot in memo.images(entry) {
+            self.images.push((self.len + slot.line, slot.clone()));
+        }
         self.len += memo.lines(entry).len();
     }
 
@@ -319,7 +362,14 @@ impl Body {
     }
 }
 
-fn body_lines(issue: &Issue, width: u16, inline_props: bool, th: &Theme, memo: &mut Memo) -> Body {
+fn body_lines(
+    issue: &Issue,
+    width: u16,
+    inline_props: bool,
+    th: &Theme,
+    memo: &mut Memo,
+    size_of: &mut SizeOf,
+) -> Body {
     let mut out = Body::new();
     out.push(Line::from(""));
     let w = width as usize;
@@ -361,7 +411,7 @@ fn body_lines(issue: &Issue, width: u16, inline_props: bool, th: &Theme, memo: &
         .filter(|d| !d.trim().is_empty())
     {
         Some(desc) => {
-            let entry = memo.render(desc, width, &[], false, th);
+            let entry = memo.render(desc, width, &[], false, th, size_of);
             out.memo(memo, entry);
         }
         None => out.push(Line::from(Span::styled(
@@ -427,7 +477,7 @@ fn body_lines(issue: &Issue, width: u16, inline_props: bool, th: &Theme, memo: &
                 th,
             ));
             out.push(Line::from(""));
-            comment_threads(&mut out, &comments.nodes, width, th, memo);
+            comment_threads(&mut out, &comments.nodes, width, th, memo, size_of);
             out.push(Line::from(Span::styled(
                 "  m  Leave a comment\u{2026}",
                 Style::default().fg(th.muted),
@@ -441,7 +491,14 @@ fn body_lines(issue: &Issue, width: u16, inline_props: bool, th: &Theme, memo: &
 /// Comments as threads: each top-level comment as a card, its replies nested
 /// inside it. Linear returns replies as siblings with a `parent`, oldest last,
 /// so the tree is rebuilt here and shown chronologically.
-fn comment_threads(out: &mut Body, comments: &[Comment], width: u16, th: &Theme, memo: &mut Memo) {
+fn comment_threads(
+    out: &mut Body,
+    comments: &[Comment],
+    width: u16,
+    th: &Theme,
+    memo: &mut Memo,
+    size_of: &mut SizeOf,
+) {
     let mut replies: HashMap<&str, Vec<&Comment>> = HashMap::new();
     let mut roots: Vec<&Comment> = Vec::new();
     let ids: Vec<&str> = comments.iter().map(|c| c.id.as_str()).collect();
@@ -460,7 +517,7 @@ fn comment_threads(out: &mut Body, comments: &[Comment], width: u16, th: &Theme,
     }
 
     for root in roots {
-        comment_card(out, root, &replies, width, th, memo);
+        comment_card(out, root, &replies, width, th, memo, size_of);
         out.push(Line::from(""));
     }
 }
@@ -481,6 +538,7 @@ fn comment_card(
     width: u16,
     th: &Theme,
     memo: &mut Memo,
+    size_of: &mut SizeOf,
 ) {
     let border = Style::default().fg(th.border);
     let w = width as usize;
@@ -543,7 +601,7 @@ fn comment_card(
 
         let mut body_gutter = gutter.clone();
         body_gutter.push(Span::raw(indent));
-        let entry = memo.render(&comment.body, width, &body_gutter, true, th);
+        let entry = memo.render(&comment.body, width, &body_gutter, true, th, size_of);
         out.memo(memo, entry);
     }
 

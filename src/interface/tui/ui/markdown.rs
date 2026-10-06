@@ -12,25 +12,39 @@
 //! exact rendered height, so scrolling clamps to the real content.
 
 use ratatui::{
+    layout::Size,
     style::{Modifier, Style},
     text::{Line, Span},
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::config::Theme;
+use crate::core::entity::line_image;
+
+/// Rows left free for an image, from `line` on, after the gutter.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImageSlot {
+    pub line: usize,
+    pub x: u16,
+    pub url: String,
+    pub size: Size,
+}
 
 /// Render `source` into lines no wider than `width` cells.
 ///
 /// `gutter` is prepended to every output line — the comment thread uses it to
-/// draw its left rule — and counts against `width`.
+/// draw its left rule — and counts against `width`. `size_of` sizes each
+/// image on its own line to fit a width; `None` leaves only its label.
 pub fn render(
     source: &str,
     width: u16,
     gutter: &[Span<'static>],
     th: &Theme,
-) -> Vec<Line<'static>> {
+    size_of: &mut dyn FnMut(&str, u16) -> Option<Size>,
+) -> (Vec<Line<'static>>, Vec<ImageSlot>) {
     let gutter_width: usize = gutter.iter().map(|s| s.width()).sum();
     let width = (width as usize).saturating_sub(gutter_width).max(8);
+    let mut slots = Vec::new();
     let mut out: Vec<Line<'static>> = Vec::new();
     let mut in_code = false;
     let mut blank_run = 0;
@@ -147,13 +161,28 @@ pub fn render(
         for line in wrap(segments, width, vec![], vec![]) {
             push(&mut out, line);
         }
+
+        // Image rows. The empty span keeps the blank trim below off them.
+        if let Some((_, url)) = line_image(trimmed)
+            && let Some(size) = size_of(url, width as u16)
+        {
+            slots.push(ImageSlot {
+                line: out.len(),
+                x: gutter_width as u16,
+                url: url.to_owned(),
+                size,
+            });
+            for _ in 0..size.height {
+                push(&mut out, vec![Span::raw("")]);
+            }
+        }
     }
 
     // A trailing blank from the source adds nothing but a wasted row.
     while out.last().is_some_and(|l| l.spans.len() == gutter.len()) {
         out.pop();
     }
-    out
+    (out, slots)
 }
 
 fn heading_level(line: &str) -> Option<usize> {
@@ -491,6 +520,15 @@ mod tests {
     use super::*;
     use crate::config::{Theme, ThemeName};
 
+    fn render(
+        source: &str,
+        width: u16,
+        gutter: &[Span<'static>],
+        th: &Theme,
+    ) -> Vec<Line<'static>> {
+        super::render(source, width, gutter, th, &mut |_, _| None).0
+    }
+
     fn th() -> Theme {
         Theme::from_name(ThemeName::Default)
     }
@@ -533,6 +571,34 @@ mod tests {
     fn images_become_a_placeholder() {
         let lines = render("![shot](https://x/y.png)", 80, &[], &th());
         assert_eq!(plain(&lines), ["[image: shot]"]);
+    }
+
+    #[test]
+    fn an_image_on_its_own_line_gets_rows_of_its_own() {
+        let gutter = vec![Span::raw("| ")];
+        let (lines, slots) = super::render(
+            "before\n![shot](https://x/y.png)",
+            40,
+            &gutter,
+            &th(),
+            &mut |url, width| {
+                assert_eq!((url, width), ("https://x/y.png", 38));
+                Some(Size::new(10, 3))
+            },
+        );
+        assert_eq!(
+            plain(&lines),
+            ["| before", "| [image: shot]", "| ", "| ", "| "]
+        );
+        assert_eq!(
+            slots,
+            [ImageSlot {
+                line: 2,
+                x: 2,
+                url: "https://x/y.png".into(),
+                size: Size::new(10, 3),
+            }]
+        );
     }
 
     #[test]

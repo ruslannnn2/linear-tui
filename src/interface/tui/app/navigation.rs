@@ -177,6 +177,7 @@ impl App {
             Screen::IssueDetail => {
                 let request = usecase::issue::ensure_thread(&self.store);
                 self.send(request);
+                self.fetch_images();
             }
             Screen::ProjectDetail => {
                 if let Some(project) = &self.nav.current_project {

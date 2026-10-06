@@ -59,6 +59,11 @@ pub enum Message {
         page: Page<Cycle>,
     },
     IssueDetail(Box<Issue>),
+    /// An issue image's file; `None` if not fetched.
+    Image {
+        url: String,
+        file: Option<std::sync::Arc<[u8]>>,
+    },
     ProjectIssues {
         project_id: ProjectId,
         page: Page<Issue>,
@@ -126,6 +131,7 @@ pub fn failure(request: &Request) -> &'static str {
             issue::Request::DeleteComment { .. } => "Failed to delete comment",
             issue::Request::Create { .. } => "Failed to create issue",
             issue::Request::OpenInBrowser(_) => "Failed to open browser",
+            issue::Request::Image { .. } => "Failed to load an image",
         },
         Request::Project(request) => match request {
             project::Request::TeamProjects { .. } => "Failed to load projects",

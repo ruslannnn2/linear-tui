@@ -79,6 +79,7 @@ async fn main() -> Result<()> {
 
     // Load config and authenticate
     let mut config = Config::load()?;
+    let image_protocol = config.ui.image_protocol.clone();
     let token_store = TokenStore::new()?;
     let auth = match mode {
         Mode::Terminal => match authenticate(&token_store, &config).await? {
@@ -158,7 +159,9 @@ async fn main() -> Result<()> {
         left: HashMap::new(),
     };
     let result = match mode {
-        Mode::Terminal => run_in_terminal(&mut runtime, &mut switcher).await,
+        Mode::Terminal => {
+            run_in_terminal(&mut runtime, &mut switcher, image_protocol.as_deref()).await
+        }
         Mode::Headless { size } => {
             if endpoint.is_none() {
                 anyhow::bail!(
@@ -422,14 +425,46 @@ where
 }
 
 /// The TUI in this terminal, until the user quits.
-async fn run_in_terminal(runtime: &mut Runtime, switcher: &mut Switcher) -> Result<()> {
+async fn run_in_terminal(
+    runtime: &mut Runtime,
+    switcher: &mut Switcher,
+    image_protocol: Option<&str>,
+) -> Result<()> {
+    use ratatui_image::picker::{Picker, ProtocolType};
     let guard = TerminalGuard::enter()?;
+    // Asks the terminal, so before any event is read.
+    let picker = match image_protocol {
+        Some("off") => Err("off in config".to_string()),
+        _ => Picker::from_query_stdio().map_err(|e| e.to_string()),
+    };
+    let forced = match image_protocol {
+        Some("sixel") => Some(ProtocolType::Sixel),
+        Some("kitty") => Some(ProtocolType::Kitty),
+        Some("iterm2") => Some(ProtocolType::Iterm2),
+        Some("halfblocks") => Some(ProtocolType::Halfblocks),
+        _ => None,
+    };
+    let images = match picker {
+        Ok(mut picker) => {
+            if let Some(protocol) = forced {
+                picker.set_protocol_type(protocol);
+            }
+            tracing::info!(protocol = ?picker.protocol_type(), font = ?picker.font_size(), "images on");
+            runtime.enable_images(picker);
+            true
+        }
+        Err(e) => {
+            tracing::warn!("images off: {e}");
+            false
+        }
+    };
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
     terminal.hide_cursor()?;
 
     loop {
         // There is a terminal to lend $EDITOR, in every session.
         runtime.app.external_editor = true;
+        runtime.app.images = images;
         loop {
             runtime.send_queued(Instant::now());
             runtime.draw(&mut terminal)?;

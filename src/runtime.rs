@@ -96,8 +96,16 @@ impl Runtime {
         self.client = Arc::new(client);
         self.tx = tx;
         self.rx = rx;
-        self.cache = ui::Cache::default();
+        self.cache = ui::Cache {
+            images: self.cache.images.carry_over(),
+            ..ui::Cache::default()
+        };
         self.dirty = true;
+    }
+
+    /// Draw issue images the way `picker` says the terminal can.
+    pub fn enable_images(&mut self, picker: ratatui_image::picker::Picker) {
+        self.cache.images.enable(picker);
     }
 
     /// Take commands from agents.

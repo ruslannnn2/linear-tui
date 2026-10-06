@@ -24,6 +24,8 @@
 //!   a list's search as you type; `issue search` is the command line's
 //! - `issue::ensure_thread` — keeps the open issue's thread on screen;
 //!   `issue show` reads it whole every time
+//! - `issue::fetch_images`, `issue::take_image` — terminal-only; `issue show`
+//!   prints the URLs
 //! - `issue::created` — puts a new issue at the top of the list on screen;
 //!   `issue create` prints it
 //! - `issue::change_refused` — takes back on screen a change Linear refused;

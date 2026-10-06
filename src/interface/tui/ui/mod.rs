@@ -1,5 +1,6 @@
 pub mod cycle_detail;
 pub mod cycle_list;
+pub mod images;
 pub mod issue_detail;
 pub mod issue_list;
 pub mod markdown;
@@ -37,6 +38,8 @@ const SIDEBAR_MIN_WIDTH: u16 = 100;
 pub struct Cache {
     /// The detail view's rendered Markdown.
     pub detail_markdown: issue_detail::Memo,
+    /// Images, decoded and encoded for the terminal.
+    pub images: images::Images,
 }
 
 /// Days since the Unix epoch for a civil (proleptic Gregorian) date.
@@ -206,7 +209,13 @@ pub fn draw(f: &mut Frame, app: &mut App, cache: &mut Cache) {
         Screen::ProjectList => project_list::draw(f, app, content),
         Screen::CycleList => cycle_list::draw(f, app, content),
         Screen::ViewList => view_list::draw(f, app, content),
-        Screen::IssueDetail => issue_detail::draw(f, app, &mut cache.detail_markdown, content),
+        Screen::IssueDetail => issue_detail::draw(
+            f,
+            app,
+            &mut cache.detail_markdown,
+            &mut cache.images,
+            content,
+        ),
         Screen::ProjectDetail => project_detail::draw(f, app, content),
         Screen::CycleDetail => cycle_detail::draw(f, app, content),
     }
